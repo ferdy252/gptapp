@@ -1,0 +1,14 @@
+# Railway deployment configuration
+# https://docs.railway.app/deploy/config-as-code
+
+[build]
+builder = "nixpacks"
+buildCommand = "cd server && npm install"
+
+[deploy]
+startCommand = "cd server && npm start"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+[[services]]
+name = "repair-diagnosis-api"

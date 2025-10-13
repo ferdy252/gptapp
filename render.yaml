@@ -1,0 +1,21 @@
+# Render deployment configuration
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: home-repair-diagnosis
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://chatgpt.com
+      - key: PORT
+        value: 3000
+      - key: OPENAI_API_KEY
+        sync: false  # Set this in Render dashboard with your actual key

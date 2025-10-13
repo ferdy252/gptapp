@@ -1,0 +1,25 @@
+{
+  "name": "repair-diagnosis-chatgpt-app",
+  "version": "1.0.0",
+  "description": "ChatGPT app for home repair diagnosis with MCP server",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=server",
+    "dev:client": "npm run dev --workspace=client",
+    "build": "npm run build --workspaces",
+    "start": "npm start --workspace=server"
+  },
+  "keywords": [
+    "chatgpt",
+    "mcp",
+    "apps-sdk",
+    "home-repair"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
