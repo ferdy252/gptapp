@@ -6,7 +6,7 @@ FROM node:18-alpine AS base
 FROM base AS server
 WORKDIR /app/server
 COPY server/package*.json ./
-RUN npm ci --only=production
+RUN npm install --omit=dev
 COPY server/src ./src
 
 # Production image
