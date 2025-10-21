@@ -19,7 +19,9 @@ export async function generatePlan({ issue_type, risk_level }) {
     // If critical/high risk, return "hire professional" plan
     if (risk_level === 'critical' || risk_level === 'high') {
       return {
-        success: true,
+        title: `Professional repair required: ${issue_type}`,
+        issue_type,
+        risk_level,
         steps: [
           {
             step_number: 1,
@@ -105,9 +107,13 @@ Return JSON format:
     });
     
     return {
-      success: true,
-      ...plan,
-      risk_level
+      title: plan.title || `DIY repair plan: ${issue_type}`,
+      issue_type,
+      risk_level,
+      steps: plan.steps || [],
+      total_time_minutes: plan.total_time_minutes || 0,
+      difficulty: plan.difficulty || 'Intermediate',
+      safety_warning: plan.safety_warning || null
     };
     
   } catch (error) {

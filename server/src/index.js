@@ -1,84 +1,77 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-import multer from 'multer';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import mcpRouter from './routes/mcp.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/dist/esm/server/sse.js';
+import { createServer } from './mcp/server.js';
 import { logger } from './utils/logger.js';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || ['https://chatgpt.com'];
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      connectSrc: ["'self'", "https://api.openai.com"]
-    }
-  }
-}));
+const mcpServer = createServer();
 
-// CORS configuration
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-  'https://chatgpt.com',
-  'http://localhost:5173'
-];
-
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: ALLOWED_ORIGINS,
   credentials: true
 }));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-  message: 'Too many requests from this IP, please try again later.'
-});
-
-app.use('/mcp', limiter);
 app.use(express.json({ limit: '10mb' }));
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// MCP routes
-app.use('/mcp', mcpRouter);
-
-// Error handling
-app.use((err, req, res, next) => {
-  logger.error('Server error:', err);
-  
-  // Don't leak error details in production
-  const message = process.env.NODE_ENV === 'production' 
-    ? 'Internal server error' 
-    : err.message;
-  
-  res.status(err.status || 500).json({
-    error: message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+app.get('/mcp/manifest', (req, res) => {
+  res.json({
+    name: mcpServer.name,
+    version: mcpServer.version,
+    description: mcpServer.description,
+    tools: mcpServer.listTools().map(({ name, description, inputSchema, _meta }) => ({
+      name,
+      description,
+      inputSchema,
+      _meta
+    }))
   });
+});
+
+app.get('/mcp', async (req, res) => {
+  try {
+    const transport = new SSEServerTransport('/mcp/messages', res, {
+      enableDnsRebindingProtection: true,
+      allowedOrigins: ALLOWED_ORIGINS
+    });
+
+    await transport.start();
+    await mcpServer.connect(transport);
+  } catch (error) {
+    logger.error('Failed to establish MCP SSE connection', error);
+    res.status(500).end('Failed to establish MCP connection');
+  }
+});
+
+app.post('/mcp/messages', async (req, res) => {
+  const transport = mcpServer.getActiveTransport(req.query.sessionId);
+  if (!transport || !(transport instanceof SSEServerTransport)) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  try {
+    await transport.handlePostMessage(req, res);
+  } catch (error) {
+    logger.error('Failed to handle MCP message', error);
+    if (!res.headersSent) {
+      res.status(500).end('Failed to process message');
+    }
+  }
 });
 
 app.listen(PORT, () => {
   logger.info(`🚀 MCP Server running on port ${PORT}`);
-  logger.info(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`🔒 CORS allowed origins: ${allowedOrigins.join(', ')}`);
+  logger.info(`📝 Manifest name: ${mcpServer.name}`);
+  logger.info(`🔒 Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
 });

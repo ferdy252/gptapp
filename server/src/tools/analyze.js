@@ -2,8 +2,8 @@ import OpenAI from 'openai';
 import { logger } from '../utils/logger.js';
 import { sanitizeInput } from '../utils/validation.js';
 
-// Lazy initialization - create client when first needed
 let openai = null;
+
 function getOpenAIClient() {
   if (!openai) {
     openai = new OpenAI({
@@ -13,7 +13,7 @@ function getOpenAIClient() {
   return openai;
 }
 
-// Safety gate: high-risk issues that force "Hire"
+const ALLOWED_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const HIGH_RISK_KEYWORDS = [
   'gas', 'natural gas', 'propane', 'gas line', 'gas leak',
   'electrical panel', 'breaker box', 'main panel', 'service panel',
@@ -25,12 +25,11 @@ const HIGH_RISK_KEYWORDS = [
 
 export async function analyzeIssue({ photos, description }) {
   try {
-    // Sanitize description
     const cleanDescription = sanitizeInput(description);
-    
-    logger.info('Starting issue analysis', { photoCount: photos.length });
-    
-    // Prepare messages for OpenAI Vision API
+    const normalizedPhotos = (photos || []).map(normalizePhoto);
+
+    logger.info('Starting issue analysis', { photoCount: normalizedPhotos.length });
+
     const messages = [
       {
         role: 'system',
@@ -46,73 +45,114 @@ CRITICAL SAFETY RULES:
 - High-risk issues → Disable all DIY options
 - Be conservative: when in doubt, recommend professional help`
       },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `Description: ${cleanDescription}\n\nAnalyze these photos and provide a diagnosis.${
-              photos.some(p => p.annotations && p.annotations.length > 0) 
-                ? '\n\nIMPORTANT: User has marked specific problem areas:\n' + 
-                  photos.map((p, idx) => 
-                    p.annotations?.map(a => 
-                      `Photo ${idx + 1}: ${a.label || 'Marked area'} at position (${Math.round(a.x)}, ${Math.round(a.y)})`
-                    ).join('\n')
-                  ).filter(Boolean).join('\n')
-                : ''
-            }`
-          },
-          ...photos.map(photo => ({
-            type: 'image_url',
-            image_url: {
-              url: photo.buffer 
-                ? `data:${photo.mimetype};base64,${photo.buffer.toString('base64')}`
-                : photo.url || photo
-            }
-          }))
-        ]
-      }
+      buildUserMessage(cleanDescription, normalizedPhotos)
     ];
-    
-    // Call OpenAI Vision API
+
     const client = getOpenAIClient();
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
       messages,
       max_tokens: 1000,
-      temperature: 0.3 // Lower temperature for more consistent diagnosis
+      temperature: 0.3
     });
-    
+
     const analysis = response.choices[0].message.content;
-    
-    // Parse analysis and apply safety gates
-    const safetyGate = checkSafetyGate(cleanDescription + ' ' + analysis);
-    
-    // Extract structured data from analysis
+    const safetyGate = checkSafetyGate(`${cleanDescription} ${analysis}`);
     const diagnosis = parseAnalysis(analysis, safetyGate);
-    
+
     logger.info('Analysis complete', {
       issueType: diagnosis.issue_type,
       recommendation: diagnosis.recommendation,
       riskLevel: diagnosis.risk_level
     });
-    
+
     return {
-      success: true,
       diagnosis,
-      raw_analysis: analysis
+      raw_analysis: analysis,
+      photos: normalizedPhotos
     };
-    
   } catch (error) {
     logger.error('Analysis failed', error);
     throw new Error(`Vision analysis failed: ${error.message}`);
   }
 }
 
-// Safety gate check
+function normalizePhoto(photo, index) {
+  if (typeof photo === 'string') {
+    return dataStringToPhoto({ data: photo }, index);
+  }
+
+  if (photo && typeof photo === 'object' && typeof photo.data === 'string') {
+    return dataStringToPhoto(photo, index);
+  }
+
+  throw new Error(`Invalid photo payload at index ${index}`);
+}
+
+function dataStringToPhoto(photo, index) {
+  const { data, mimeType = 'image/jpeg', annotations = [] } = photo;
+  const trimmed = data.trim();
+
+  let detectedMime = mimeType;
+  let base64Payload = trimmed;
+
+  if (trimmed.startsWith('data:')) {
+    const [header, payload] = trimmed.split(',', 2);
+    if (!payload) {
+      throw new Error(`Invalid data URI at index ${index}`);
+    }
+    base64Payload = payload;
+    const mimeMatch = header.match(/^data:(.*?);base64$/i);
+    if (mimeMatch?.[1]) {
+      detectedMime = mimeMatch[1];
+    }
+  }
+
+  if (!ALLOWED_MIMETYPES.includes(detectedMime)) {
+    throw new Error(`Unsupported image mime type: ${detectedMime}`);
+  }
+
+  return {
+    buffer: Buffer.from(base64Payload, 'base64'),
+    mimetype: detectedMime,
+    annotations: annotations || []
+  };
+}
+
+function buildUserMessage(cleanDescription, photos) {
+  const annotationLines = photos
+    .map((photo, idx) =>
+      photo.annotations?.map(a =>
+        `Photo ${idx + 1}: ${a.label || 'Marked area'} at position (${Math.round(a.x)}, ${Math.round(a.y)})`
+      )?.join('\n')
+    )
+    .filter(Boolean)
+    .join('\n');
+
+  const textContent = `Description: ${cleanDescription}\n\nAnalyze these photos and provide a diagnosis.${
+    annotationLines ? `\n\nIMPORTANT: User has marked specific problem areas:\n${annotationLines}` : ''
+  }`;
+
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: textContent
+      },
+      ...photos.map(photo => ({
+        type: 'image_url',
+        image_url: {
+          url: `data:${photo.mimetype};base64,${photo.buffer.toString('base64')}`
+        }
+      }))
+    ]
+  };
+}
+
 function checkSafetyGate(text) {
   const lowerText = text.toLowerCase();
-  
+
   for (const keyword of HIGH_RISK_KEYWORDS) {
     if (lowerText.includes(keyword.toLowerCase())) {
       return {
@@ -122,20 +162,17 @@ function checkSafetyGate(text) {
       };
     }
   }
-  
+
   return { triggered: false };
 }
 
-// Parse GPT response into structured diagnosis
 function parseAnalysis(text, safetyGate) {
-  // Extract issue type (first sentence usually contains it)
   const lines = text.split('\n').filter(l => l.trim());
   const issueType = lines[0]?.substring(0, 100) || 'Unknown issue';
-  
-  // Determine risk level from keywords
+
   let riskLevel = 'low';
   const lowerText = text.toLowerCase();
-  
+
   if (safetyGate.triggered || lowerText.includes('critical') || lowerText.includes('dangerous')) {
     riskLevel = 'critical';
   } else if (lowerText.includes('high risk') || lowerText.includes('professional required')) {
@@ -143,32 +180,26 @@ function parseAnalysis(text, safetyGate) {
   } else if (lowerText.includes('medium risk') || lowerText.includes('caution')) {
     riskLevel = 'medium';
   }
-  
-  // Determine recommendation
-  const recommendation = (safetyGate.triggered || riskLevel === 'critical' || riskLevel === 'high')
-    ? 'hire'
-    : 'diy';
-  
-  // Extract confidence (look for percentage)
+
+  const recommendation = safetyGate.triggered || riskLevel === 'critical' || riskLevel === 'high' ? 'hire' : 'diy';
+
   const confidenceMatch = text.match(/(\d{1,3})%/);
-  const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 75;
-  
-  // Extract safety concerns
+  const confidence = confidenceMatch ? parseInt(confidenceMatch[1], 10) : 75;
+
   const safetyConcerns = [];
   if (safetyGate.triggered) {
     safetyConcerns.push(safetyGate.reason);
   }
-  
-  // Look for safety-related sentences
-  const safetyLines = lines.filter(line => 
+
+  const safetyLines = lines.filter(line =>
     line.toLowerCase().includes('safety') ||
     line.toLowerCase().includes('danger') ||
     line.toLowerCase().includes('risk') ||
     line.toLowerCase().includes('warning')
   );
-  
+
   safetyConcerns.push(...safetyLines.slice(0, 3));
-  
+
   return {
     issue_type: issueType,
     risk_level: riskLevel,
