@@ -10,9 +10,6 @@ README.md
 .idea
 coverage
 .DS_Store
-dist
-build
 tmp
 logs
 *.log
-client
