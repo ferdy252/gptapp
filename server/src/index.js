@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/dist/esm/server/sse.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { createServer } from './mcp/server.js';
 import { logger } from './utils/logger.js';
 
