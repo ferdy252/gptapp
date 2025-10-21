@@ -2,6 +2,14 @@
 
 FROM node:18-alpine AS base
 
+# Build client MCP widgets
+FROM base AS client
+WORKDIR /app/client
+COPY client/package*.json ./
+RUN npm install
+COPY client ./
+RUN npm run build:mcp
+
 # Server build
 FROM base AS server
 WORKDIR /app/server
@@ -15,6 +23,8 @@ WORKDIR /app
 
 # Copy server files
 COPY --from=server /app/server /app/server
+# Copy built MCP widgets
+COPY --from=client /app/client/dist /app/client/dist
 
 # Set environment
 ENV NODE_ENV=production
