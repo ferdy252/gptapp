@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { createServer } from './mcp/server.js';
+import { createServer, SERVER_METADATA, toolManifest } from './mcp/server.js';
 import { logger } from './utils/logger.js';
 
 dotenv.config();
@@ -27,15 +27,10 @@ app.get('/health', (req, res) => {
 
 app.get('/mcp/manifest', (req, res) => {
   res.json({
-    name: mcpServer.name,
-    version: mcpServer.version,
-    description: mcpServer.description,
-    tools: mcpServer.listTools().map(({ name, description, inputSchema, _meta }) => ({
-      name,
-      description,
-      inputSchema,
-      _meta
-    }))
+    name: SERVER_METADATA.name,
+    version: SERVER_METADATA.version,
+    description: SERVER_METADATA.description,
+    tools: toolManifest
   });
 });
 
@@ -72,6 +67,6 @@ app.post('/mcp/messages', async (req, res) => {
 
 app.listen(PORT, () => {
   logger.info(`🚀 MCP Server running on port ${PORT}`);
-  logger.info(`📝 Manifest name: ${mcpServer.name}`);
+  logger.info(`📝 Manifest name: ${SERVER_METADATA.name}`);
   logger.info(`🔒 Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
 });
